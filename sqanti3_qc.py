@@ -676,8 +676,12 @@ def reference_parser(args, genome_chroms):
                 i+=1
             known_5_3_by_gene[r.gene]['begin'].add(r.txStart)
             known_5_3_by_gene[r.gene]['end'].add(r.txEnd)
-            CDS_start_end_by_gene[r.gene]['start'].add(r.cdsStart)
-            CDS_start_end_by_gene[r.gene]['end'].add(r.cdsEnd)
+            if r.cdsStart == r.cdsEnd:
+                CDS_start_end_by_gene[r.gene]['start'].add(math.inf)
+                CDS_start_end_by_gene[r.gene]['end'].add(-math.inf)
+            else:
+                CDS_start_end_by_gene[r.gene]['start'].add(r.cdsStart)
+                CDS_start_end_by_gene[r.gene]['end'].add(r.cdsEnd)
 
     # check that all genes' chromosomes are in the genome file
     ref_chroms = set(refs_1exon_by_chr.keys()).union(list(refs_exons_by_chr.keys()))
@@ -1387,7 +1391,7 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
                 elif curr_donor_novel and curr_acceptor_novel and (not curr_donor_CDS) and curr_acceptor_CDS and curr_donor_exon and curr_acceptor_exon:
                     new_subtype.append(jxn+" CDS_UTR")
                 else:
-                    new_subtype.append("not sure??")
+                    new_subtype.append("uncategorized")
         # all_junctions_known = True
         # all_junctions_in_hit_ref = True
         # for d,a in trec.junctions:
