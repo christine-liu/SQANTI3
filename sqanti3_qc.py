@@ -1270,7 +1270,7 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
         return inEx
 
     def in_CDS(CDS_by_gene, ref_gene, coord):
-        return coord in range(CDS_by_gene[ref_gene]['start'], CDS_by_gene[ref_gene]['end'])
+        return coord >= CDS_by_gene[ref_gene]['start'] and coord < CDS_by_gene[ref_gene]['end']
 
     def novel_exon(trec, ref_gene):
       #input is trec genePredRecord of isoform in question
