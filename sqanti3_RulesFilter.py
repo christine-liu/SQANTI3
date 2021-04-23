@@ -9,6 +9,7 @@ The isoform is FSM, ISM, or NIC and (does not have intrapriming or has polyA_mot
 The isoform is NNC, does not have intrapriming/or polyA motif, not RT-switching, and all junctions are either all canonical or short-read-supported
 The isoform is antisense, intergenic, genic, does not have intrapriming/or polyA motif, not RT-switching, and all junctions are either all canonical or short-read-supported
 """
+#04/23/2021 Edited by Christine to skip generation of SQANTI3 report
 
 import os, sys, argparse, subprocess
 import distutils.spawn
@@ -156,12 +157,12 @@ def sqanti_filter_lite(args):
                     f.write(">{0}\n{1}\n".format(r.description, r.seq))
         print("Output written to: {0}".format(f.name), file=sys.stdout)
 
-
-    print("**** Generating SQANTI3 report....", file=sys.stderr)
-    cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p="mock")
-    if subprocess.check_call(cmd, shell=True)!=0:
-        print("ERROR running command: {0}".format(cmd), file=sys.stderr)
-        sys.exit(-1)
+    if not args.skip_report:
+        print("**** Generating SQANTI3 report....", file=sys.stderr)
+        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p="mock")
+        if subprocess.check_call(cmd, shell=True)!=0:
+            print("ERROR running command: {0}".format(cmd), file=sys.stderr)
+            sys.exit(-1)
 
 
 def main():
@@ -181,6 +182,8 @@ def main():
     parser.add_argument("--skipJunction", action="store_true", default=False, help='\t\tSkip output of junctions file')
     #parser.add_argument("--always_keep_canonical", default=False, action="store_true", help="Always keep isoforms with all canonical junctions, regardless of other criteria. (default: False)")
     parser.add_argument("-v", "--version", help="Display program version number.", action='version', version='SQANTI3 '+str(__version__))
+    parser.add_argument("--skip_report", action="store_true", default=False, help=argparse.SUPPRESS)
+
 
     args = parser.parse_args()
 

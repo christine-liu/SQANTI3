@@ -1293,8 +1293,6 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
         if len(novel_exons) == 0:
             return False, novel_junctions
         else:
-            print("novel_exons")
-            print(novel_exons)
             for j in novel_exons:
                 if j == 0:
                     novel_junctions.append(0)
@@ -1349,14 +1347,10 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
         else:
             isoforms_hit.str_class="novel_not_in_catalog"
             novelJxn_index = [i for i,x in enumerate(jxn_list_known) if x==False] #indices of any donor/acceptor pair where one is novel
-            print(trec.id)
-            print(novelJxn_index)
             novel_ex_status, novel_ex_jxns = novel_exon(trec, ref_genes[0])
             if novel_ex_status:
                 new_subtype.append("novel_exon")
-            print(novel_ex_jxns)
             newJxn_list = list((set(novel_ex_jxns)^set(novelJxn_index))&set(novelJxn_index))
-            print(newJxn_list)
             for i in newJxn_list: #iterate over all the other novel junctions to see what they are
                 curr_donor = trec.junctions[i][0]
                 curr_donor_novel = not splice_list_known[i][0]
@@ -1367,29 +1361,28 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
                 curr_donor_exon = in_exon(trec, curr_donor,ref_genes[0])
                 curr_acceptor_exon = in_exon(trec, curr_acceptor,ref_genes[0])
                 #for each novel junction figure out if donor/acceptor are in CDS or UTR - combination will determine subtype
-                jxn=str(i)
                 if not curr_donor_novel and not curr_acceptor_novel:
-                    new_subtype.append(jxn+ " " + str(curr_donor) + " " + str(curr_acceptor) + " combination_of_known_splicesites")
+                    new_subtype.append("combination_of_known_splicesites")
                 elif (curr_donor_novel and not curr_donor_exon) or (curr_acceptor_novel and not curr_acceptor_exon):
-                    new_subtype.append(jxn+" partial_intron_retention")
+                    new_subtype.append("partial_intron_retention")
                 elif curr_acceptor_novel and curr_acceptor_exon and not curr_donor_novel:
                     if trec.strand == "+":
-                        new_subtype.append(jxn+" Alt3")
+                        new_subtype.append("Alt3")
                     else:
-                        new_subtype.append(jxn+" Alt5")
+                        new_subtype.append("Alt5")
                 elif curr_donor_novel and curr_donor_exon and not curr_acceptor_novel:
                     if trec.strand == "+":
-                      new_subtype.append(jxn + " Alt5")
+                      new_subtype.append("Alt5")
                     else:
-                      new_subtype.append(jxn+ " Alt3")
+                      new_subtype.append("Alt3")
                 elif curr_donor_novel and curr_acceptor_novel and curr_donor_CDS and curr_acceptor_CDS and curr_donor_exon and curr_acceptor_exon:
-                    new_subtype.append(jxn+ " CDS_CDS")
+                    new_subtype.append("CDS_CDS")
                 elif curr_donor_novel and curr_acceptor_novel and (not curr_donor_CDS) and (not curr_acceptor_CDS) and curr_donor_exon and curr_acceptor_exon:
-                    new_subtype.append(jxn+" UTR_UTR")
+                    new_subtype.append("UTR_UTR")
                 elif curr_donor_novel and curr_acceptor_novel and curr_donor_CDS and (not curr_acceptor_CDS) and curr_donor_exon and curr_acceptor_exon:
-                    new_subtype.append(jxn+" CDS_UTR")
+                    new_subtype.append("CDS_UTR")
                 elif curr_donor_novel and curr_acceptor_novel and (not curr_donor_CDS) and curr_acceptor_CDS and curr_donor_exon and curr_acceptor_exon:
-                    new_subtype.append(jxn+" CDS_UTR")
+                    new_subtype.append("CDS_UTR")
                 else:
                     new_subtype.append("uncategorized")
         # all_junctions_known = True
