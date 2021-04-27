@@ -702,9 +702,6 @@ def reference_parser(args, genome_chroms):
         CDS_start_end_by_gene[x]['start']=min(CDS_start_end_by_gene[x]['start'])
         CDS_start_end_by_gene[x]['end']=max(CDS_start_end_by_gene[x]['end'])
 
-    testCDS = open("/mnt/data/chunlab/Christine/SQANTICL_test/CDS_ref_gencodev36.txt", "w+")
-    for key in CDS_start_end_by_gene.keys():
-        testCDS.write(key + "\t" + str(CDS_start_end_by_gene[key]['start']) + "\t" + str(CDS_start_end_by_gene[key]['end']) + '\n')
     return dict(refs_1exon_by_chr), dict(refs_exons_by_chr), dict(junctions_by_chr), dict(junctions_by_gene), dict(known_5_3_by_gene), dict(CDS_start_end_by_gene), dict(ref_ex_by_gene)
 
 
@@ -839,7 +836,7 @@ def expression_parser(expressionFile):
         return exp_dict
 
 
-def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, trec, genome_dict, nPolyA):
+def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, trec, genome_dict, nPolyA, CDS_by_gene):
     """
     :param refs_1exon_by_chr: dict of single exon references (chr -> IntervalTree)
     :param refs_exons_by_chr: dict of multi exon references (chr -> IntervalTree)
@@ -943,6 +940,8 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
             else:
                 return "internal_fragment"
 
+    def in_CDS(CDS_by_gene, ref_gene, coord):
+        return coord >= CDS_by_gene[ref_gene]['start'] and coord < CDS_by_gene[ref_gene]['end']
     # Transcript information for a single query id and comparison with reference.
 
     # Intra-priming: calculate percentage of "A"s right after the end
@@ -970,7 +969,7 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
     ########### SPLICED TRANSCRIPTS ###########
     ##***************************************##
 
-    cat_ranking = {'full-splice_match': 5, 'incomplete-splice_match': 4, 'anyKnownJunction': 3, 'anyKnownSpliceSite': 2,
+    cat_ranking = {'full-splice_match': 5, 'incomplete-splice_match': 4, 'anyKnownJunction': 3, 'anyKnownSpliceSite': 2, 'novel_not_in_catalog':1.5,
                    'geneOverlap': 1, '': 0}
 
     #if trec.id.startswith('PB.1961.2'):
@@ -1010,9 +1009,24 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
                 #    pdb.set_trace()
                 if ref.exonCount == 1: # mono-exonic reference, handle specially here
                     if calc_exon_overlap(trec.exons, ref.exons) > 0 and cat_ranking[isoform_hit.str_class] < cat_ranking["geneOverlap"]:
+                        new_subtype=[]
+                        for jxn in trec.junctions:
+                            donor=jxn[0]
+                            acceptor=jxn[1]
+                            donor_CDS=in_CDS(CDS_by_gene, ref.gene, donor)
+                            acceptor_CDS=in_CDS(CDS_by_gene, ref.gene, acceptor)
+                            if donor_CDS and acceptor_CDS:
+                                new_subtype.append("CDS_CDS")
+                            elif donor_CDS and not acceptor_CDS:
+                                new_subtype.append("CDS_UTR")
+                            elif not donor_CDS and acceptor_CDS:
+                                new_subtype.append("CDS_UTR")
+                            else:
+                                new_subtype.append("UTR_UTR")
+                        subtypeString=",".join(sorted(list(set(new_subtype))))
                         isoform_hit = myQueryTranscripts(trec.id, "NA", "NA", trec.exonCount, trec.length,
-                                                            "geneOverlap",
-                                                             subtype="mono-exon",
+                                                            str_class="novel_not_in_catalog",
+                                                             subtype=subtypeString,
                                                              chrom=trec.chrom,
                                                              strand=trec.strand,
                                                              genes=[ref.gene],
@@ -1646,7 +1660,7 @@ def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_b
     for chrom,records in isoforms_by_chr.items():
         for rec in records:
             # Find best reference hit
-            isoform_hit = transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, rec, genome_dict, nPolyA=args.window)
+            isoform_hit = transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, rec, genome_dict, nPolyA=args.window, CDS_by_gene=CDS_by_gene)
 
             if isoform_hit.str_class in ("anyKnownJunction", "anyKnownSpliceSite"):
                 # not FSM or ISM --> see if it is NIC, NNC, or fusion
