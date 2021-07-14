@@ -1,5 +1,6 @@
+#!/usr/bin/env python3
 __author__  = "etseng@pacb.com"
-__version__ = '7.3.2'   # Python 3.7 syntax!
+__version__ = '3.0'   # Python 3.7 syntax!
 
 """
 Lightweight filtering of SQANTI by using .classification.txt output
@@ -157,9 +158,9 @@ def sqanti_filter_lite(args):
                     f.write(">{0}\n{1}\n".format(r.description, r.seq))
         print("Output written to: {0}".format(f.name), file=sys.stdout)
 
-    if not args.skip_report:
+    if args.report != 'skip':
         print("**** Generating SQANTI3 report....", file=sys.stderr)
-        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p="mock")
+        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d} {a} {b}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p="mock", a=args.saturation, b=args.report)
         if subprocess.check_call(cmd, shell=True)!=0:
             print("ERROR running command: {0}".format(cmd), file=sys.stderr)
             sys.exit(-1)
@@ -180,6 +181,8 @@ def main():
     parser.add_argument("--skipGTF", action="store_true", default=False, help='\t\tSkip output of GTF')
     parser.add_argument("--skipFaFq", action="store_true", default=False, help='\t\tSkip output of isoform fasta/fastq')
     parser.add_argument("--skipJunction", action="store_true", default=False, help='\t\tSkip output of junctions file')
+    parser.add_argument("--saturation", action="store_true", default=False, help='\t\tInclude saturation curves into report')
+    parser.add_argument("--report", choices=['html', 'pdf', 'both', 'skip'], default='html', help='\t\tselect report format\t\t--html\t\t--pdf\t\t--both\t\t--skip')
     #parser.add_argument("--always_keep_canonical", default=False, action="store_true", help="Always keep isoforms with all canonical junctions, regardless of other criteria. (default: False)")
     parser.add_argument("-v", "--version", help="Display program version number.", action='version', version='SQANTI3 '+str(__version__))
     parser.add_argument("--skip_report", action="store_true", default=False, help=argparse.SUPPRESS)
