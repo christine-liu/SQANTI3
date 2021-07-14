@@ -1,11 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # SQANTI: Structural and Quality Annotation of Novel Transcript Isoforms
 # Authors: Lorena de la Fuente, Hector del Risco, Cecile Pereira and Manuel Tardaguila
 # Modified by Liz (etseng@pacb.com) as SQANTI2/3 versions
 # Modified by Fran (francisco.pardo.palacios@gmail.com) currently as SQANTI3 version (05/15/2020)
 
 __author__  = "etseng@pacb.com"
-__version__ = '2.0.0'  # Python 3.7
+__version__ = '3.3'  # Python 3.7
 
 import pdb
 import os, re, sys, subprocess, timeit, glob, copy
@@ -26,7 +26,7 @@ utilitiesPath = os.path.join(os.path.dirname(os.path.realpath(__file__)), "utili
 sys.path.insert(0, utilitiesPath)
 from rt_switching import rts
 from indels_annot import calc_indels_from_sam
-
+from short_reads import *
 
 try:
     from Bio.Seq import Seq
@@ -104,7 +104,7 @@ FIELDS_JUNC = ['isoform', 'chrom', 'strand', 'junction_number', 'genomic_start_c
                    'start_site_category', 'end_site_category', 'diff_to_Ref_start_site',
                    'diff_to_Ref_end_site', 'bite_junction', 'splice_site', 'canonical',
                    'RTS_junction', 'indel_near_junct',
-                   'phyloP_start', 'phyloP_end', 'sample_with_cov', "total_coverage"] #+coverage_header
+                   'phyloP_start', 'phyloP_end', 'sample_with_cov', "total_coverage_unique", "total_coverage_multi"] #+coverage_header
 
 FIELDS_CLASS = ['isoform', 'chrom', 'strand', 'length',  'exons',  'structural_category',
                 'associated_gene', 'associated_transcript',  'ref_length', 'ref_exons',
@@ -117,7 +117,7 @@ FIELDS_CLASS = ['isoform', 'chrom', 'strand', 'length',  'exons',  'structural_c
                 'perc_A_downstream_TTS', 'seq_A_downstream_TTS',
                 'dist_to_cage_peak', 'within_cage_peak',
                 'dist_to_polya_site', 'within_polya_site',
-                'polyA_motif', 'polyA_dist', 'ORF_seq']
+                'polyA_motif', 'polyA_dist', 'ORF_seq', 'ratio_TSS']
 
 RSCRIPTPATH = distutils.spawn.find_executable('Rscript')
 RSCRIPT_REPORT = 'SQANTI3_report.R'
@@ -126,8 +126,10 @@ if os.system(RSCRIPTPATH + " --version")!=0:
     print("Rscript executable not found! Abort!", file=sys.stderr)
     sys.exit(-1)
 
-SPLIT_ROOT_DIR = 'splits/'
-
+def get_split_dir(args):
+    split_prefix=os.path.join(os.path.abspath(args.dir), args.output)
+    split_directory = split_prefix+'_splits/'
+    return split_directory
 
 class genePredReader(object):
     def __init__(self, filename):
@@ -228,7 +230,7 @@ class myQueryTranscripts:
                  FSM_class = None, percAdownTTS = None, seqAdownTTS=None,
                  dist_cage='NA', within_cage='NA',
                  dist_polya_site='NA', within_polya_site='NA',
-                 polyA_motif='NA', polyA_dist='NA'):
+                 polyA_motif='NA', polyA_dist='NA', ratio_TSS='NA'):
 
         self.id  = id
         self.tss_diff    = tss_diff   # distance to TSS of best matching ref
@@ -281,6 +283,7 @@ class myQueryTranscripts:
         self.dist_polya_site   = dist_polya_site    # distance to the closest polyA site (--polyA_peak, BEF file)
         self.polyA_motif = polyA_motif
         self.polyA_dist  = polyA_dist               # distance to the closest polyA motif (--polyA_motif_list, 6mer motif list)
+        self.ratio_TSS = ratio_TSS
 
     def get_total_diff(self):
         return abs(self.tss_diff)+abs(self.tts_diff)
@@ -332,7 +335,7 @@ class myQueryTranscripts:
                                                                                                                                                            str(self.dist_polya_site),
                                                                                                                                                            str(self.within_polya_site),
                                                                                                                                                            str(self.polyA_motif),
-                                                                                                                                                           str(self.polyA_dist))
+                                                                                                                                                           str(self.polyA_dist), str(self.ratio_TSS))
 
 
     def as_dict(self):
@@ -381,7 +384,8 @@ class myQueryTranscripts:
          'dist_to_polya_site': self.dist_polya_site,
          'within_polya_site': self.within_polya_site,
          'polyA_motif': self.polyA_motif,
-         'polyA_dist': self.polyA_dist
+         'polyA_dist': self.polyA_dist,
+         'ratio_TSS' : self.ratio_TSS
          }
         for sample,count in self.FL_dict.items():
             d["FL."+sample] = count
@@ -464,7 +468,7 @@ def correctionPlusORFpred(args, genome_dict):
     if os.path.exists(corrFASTA):
         print("Error corrected FASTA {0} already exists. Using it...".format(corrFASTA), file=sys.stderr)
     else:
-        if not args.gtf:
+        if args.fasta:
             if os.path.exists(corrSAM):
                 print("Aligned SAM {0} already exists. Using it...".format(corrSAM), file=sys.stderr)
             else:
@@ -630,7 +634,7 @@ def reference_parser(args, genome_chroms):
         print("{0} already exists. Using it.".format(referenceFiles), file=sys.stdout)
     else:
         ## gtf to genePred
-        if not args.genename:
+        if not (args.genename or args.isoAnnotLite):
             subprocess.call([GTF2GENEPRED_PROG, args.annotation, referenceFiles, '-genePredExt', '-allErrors', '-ignoreGroupsWithoutExons'])
         else:
             subprocess.call([GTF2GENEPRED_PROG, args.annotation, referenceFiles, '-genePredExt', '-allErrors', '-ignoreGroupsWithoutExons', '-geneNameAsName2'])
@@ -714,7 +718,7 @@ def isoforms_parser(args):
 def STARcov_parser(coverageFiles): # just valid with unstrand-specific RNA-seq protocols.
     """
     :param coverageFiles: comma-separated list of STAR junction output files or a directory containing junction files
-    :return: list of samples, dict of (chrom,strand) --> (0-based start, 1-based end) --> {dict of sample -> unique reads supporting this junction}
+    :return: list of samples, dict of (chrom,strand) --> (0-based start, 1-based end) --> {dict of sample -> (uniq,multi) reads supporting this junction}
     """
     if os.path.isdir(coverageFiles):
         cov_files = glob.glob(coverageFiles + "/*SJ.out.tab")
@@ -726,7 +730,7 @@ def STARcov_parser(coverageFiles): # just valid with unstrand-specific RNA-seq p
     print("Input pattern: {0}.\nThe following files found and to be read as junctions:\n{1}".format(\
         coverageFiles, "\n".join(cov_files) ), file=sys.stderr)
 
-    cov_by_chrom_strand = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: 0)))
+    cov_by_chrom_strand = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: (0,0))))
     undefined_strand_count = 0
     all_read = 0
     samples = []
@@ -736,11 +740,11 @@ def STARcov_parser(coverageFiles): # just valid with unstrand-specific RNA-seq p
         for r in STARJunctionReader(file):
             if r.strand == 'NA':
                 # undefined strand, so we put them in BOTH strands otherwise we'll lose all non-canonical junctions from STAR
-                cov_by_chrom_strand[(r.chrom, '+')][(r.start, r.end)][prefix] = r.unique_count + r.multi_count
-                cov_by_chrom_strand[(r.chrom, '-')][(r.start, r.end)][prefix] = r.unique_count + r.multi_count
+                cov_by_chrom_strand[(r.chrom, '+')][(r.start, r.end)][prefix] = (r.unique_count, r.multi_count)
+                cov_by_chrom_strand[(r.chrom, '-')][(r.start, r.end)][prefix] = (r.unique_count, r.multi_count)
                 undefined_strand_count += 1
             else:
-                cov_by_chrom_strand[(r.chrom, r.strand)][(r.start, r.end)][prefix] = r.unique_count + r.multi_count
+                cov_by_chrom_strand[(r.chrom, r.strand)][(r.start, r.end)][prefix] = (r.unique_count, r.multi_count)
             all_read += 1
     print("{0} junctions read. {1} junctions added to both strands because no strand information from STAR.".format(all_read, undefined_strand_count), file=sys.stderr)
 
@@ -1018,22 +1022,82 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
                         # (1) no prev hits yet
                         # (2) this one is better (prev not FSM or is FSM but worse tss/tts)
                         if cat_ranking[isoform_hit.str_class] < cat_ranking["full-splice_match"] or \
-                                abs(diff_tss)+abs(diff_tts) < isoform_hit.get_total_diff():
-                            isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
-                                                             str_class="full-splice_match",
-                                                             subtype=subtype,
-                                                             chrom=trec.chrom,
-                                                             strand=trec.strand,
-                                                             genes=[ref.gene],
-                                                             transcripts=[ref.id],
-                                                             refLen = ref.length,
-                                                             refExons= ref.exonCount,
-                                                             refStart=ref.txStart,
-                                                             refEnd=ref.txEnd,
-                                                             q_splicesite_hit=calc_splicesite_agreement(trec.exons, ref.exons),
-                                                             q_exon_overlap=calc_exon_overlap(trec.exons, ref.exons),
-                                                             percAdownTTS=str(percA),
-                                                             seqAdownTTS=seq_downTTS)
+                                                    abs(diff_tss)+abs(diff_tts) < isoform_hit.get_total_diff():
+                            if abs(diff_tss) < 50 and abs(diff_tts) < 50:
+                                subtype = 'reference_match'
+                                isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
+                                                                 str_class="full-splice_match",
+                                                                 subtype=subtype,
+                                                                 chrom=trec.chrom,
+                                                                 strand=trec.strand,
+                                                                 genes=[ref.gene],
+                                                                 transcripts=[ref.id],
+                                                                 refLen = ref.length,
+                                                                 refExons= ref.exonCount,
+                                                                 refStart=ref.txStart,
+                                                                 refEnd=ref.txEnd,
+                                                                 q_splicesite_hit=calc_splicesite_agreement(trec.exons, ref.exons),
+                                                                 q_exon_overlap=calc_exon_overlap(trec.exons, ref.exons),
+                                                                 percAdownTTS=str(percA),
+                                                                 seqAdownTTS=seq_downTTS)
+
+                                # subcategory for matching 5' and non-matching 3'
+
+                            if abs(diff_tss) < 50 and abs(diff_tts) > 50:
+                                subtype = 'alternative_3end'
+                                isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
+                                                                 str_class="full-splice_match",
+                                                                 subtype=subtype,
+                                                                 chrom=trec.chrom,
+                                                                 strand=trec.strand,
+                                                                 genes=[ref.gene],
+                                                                 transcripts=[ref.id],
+                                                                 refLen = ref.length,
+                                                                 refExons= ref.exonCount,
+                                                                 refStart=ref.txStart,
+                                                                 refEnd=ref.txEnd,
+                                                                 q_splicesite_hit=calc_splicesite_agreement(trec.exons, ref.exons),
+                                                                 q_exon_overlap=calc_exon_overlap(trec.exons, ref.exons),
+                                                                 percAdownTTS=str(percA),
+                                                                 seqAdownTTS=seq_downTTS)
+
+                                # subcategory for matching 3' and non-matching 5'
+                            if abs(diff_tss) > 50 and abs(diff_tts) < 50:
+                                subtype = 'alternative_5end'
+                                isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
+                                                                 str_class="full-splice_match",
+                                                                 subtype=subtype,
+                                                                 chrom=trec.chrom,
+                                                                 strand=trec.strand,
+                                                                 genes=[ref.gene],
+                                                                 transcripts=[ref.id],
+                                                                 refLen = ref.length,
+                                                                 refExons= ref.exonCount,
+                                                                 refStart=ref.txStart,
+                                                                 refEnd=ref.txEnd,
+                                                                 q_splicesite_hit=calc_splicesite_agreement(trec.exons, ref.exons),
+                                                                 q_exon_overlap=calc_exon_overlap(trec.exons, ref.exons),
+                                                                 percAdownTTS=str(percA),
+                                                                 seqAdownTTS=seq_downTTS)
+
+                                # subcategory for non-matching 3' and non-matching 5'
+                            if abs(diff_tss) > 50 and abs(diff_tts) > 50:
+                                subtype = 'alternative_3end5end'
+                                isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
+                                                                 str_class="full-splice_match",
+                                                                 subtype=subtype,
+                                                                 chrom=trec.chrom,
+                                                                 strand=trec.strand,
+                                                                 genes=[ref.gene],
+                                                                 transcripts=[ref.id],
+                                                                 refLen = ref.length,
+                                                                 refExons= ref.exonCount,
+                                                                 refStart=ref.txStart,
+                                                                 refEnd=ref.txEnd,
+                                                                 q_splicesite_hit=calc_splicesite_agreement(trec.exons, ref.exons),
+                                                                 q_exon_overlap=calc_exon_overlap(trec.exons, ref.exons),
+                                                                 percAdownTTS=str(percA),
+                                                                 seqAdownTTS=seq_downTTS)
                     # #######################################################
                     # SQANTI's incomplete-splice_match
                     # (only check if don't already have a FSM match)
@@ -1341,7 +1405,7 @@ def write_junctionInfo(trec, junctions_by_chr, accepted_canonical_sites, indelIn
     :param indelInfo: indels near junction information, dict of pbid --> list of junctions near indel (in Interval format)
     :param genome_dict: genome fasta dict
     :param fout: DictWriter handle
-    :param covInf: (optional) junction coverage information, dict of (chrom,strand) -> (0-based start,1-based end) -> dict of {sample -> unique read count}
+    :param covInf: (optional) junction coverage information, dict of (chrom,strand) -> (0-based start,1-based end) -> dict of {sample -> (unique, multi) read count}
     :param covNames: (optional) list of sample names for the junction coverage information
     :param phyloP_reader: (optional) dict of (chrom,0-based coord) --> phyloP score
 
@@ -1358,17 +1422,27 @@ def write_junctionInfo(trec, junctions_by_chr, accepted_canonical_sites, indelIn
             if abs(a) < abs(b): return a
             else: return b
 
-    if trec.chrom not in junctions_by_chr:
-        # nothing to do
-        return
-
     # go through each trec junction
     for junction_index, (d, a) in enumerate(trec.junctions):
         # NOTE: donor just means the start, not adjusted for strand
-        # find the closest junction start site
-        min_diff_s = -find_closest_in_list(junctions_by_chr[trec.chrom]['donors'], d)
-        # find the closest junction end site
-        min_diff_e = find_closest_in_list(junctions_by_chr[trec.chrom]['acceptors'], a)
+        # Check if the chromosome of the transcript has any annotation by the reference
+        # create a list in case there are chromosomes present in the input but not in the annotation dictionary junctions_by_chr
+        missing_chr=[]
+        junction_cat = "novel"
+        if (trec.chrom in junctions_by_chr) and (trec.chrom not in missing_chr):
+            # Find the closest junction start site
+            min_diff_s = -find_closest_in_list(junctions_by_chr[trec.chrom]['donors'], d)
+            # find the closest junction end site
+            min_diff_e = find_closest_in_list(junctions_by_chr[trec.chrom]['acceptors'], a)
+            if ((d,a) in junctions_by_chr[trec.chrom]['da_pairs']):
+                junction_cat = "known"
+        else:
+            # if there is no record in the reference of junctions in this chromosome, minimum distances will be NA
+            # add also new chromosome to the junctions_by_chr with one dummy SJ d=1, a=2
+            if trec.chrom not in missing_chr:
+                missing_chr.append(trec.chrom)
+            min_diff_s = float("NaN")
+            min_diff_e = float("NaN")
 
         splice_site = trec.get_splice_site(genome_dict, junction_index)
 
@@ -1376,7 +1450,7 @@ def write_junctionInfo(trec, junctions_by_chr, accepted_canonical_sites, indelIn
         if indelInfo is not None:
             indel_near_junction = "TRUE" if (trec.id in indelInfo and Interval(d,a) in indelInfo[trec.id]) else "FALSE"
 
-        sample_cov = defaultdict(lambda: 0)  # sample -> unique count for this junction
+        sample_cov = defaultdict(lambda: (0,0))  # sample -> (unique, multi) count for this junction
         if covInf is not None:
             sample_cov = covInf[(trec.chrom, trec.strand)][(d,a)]
 
@@ -1394,11 +1468,11 @@ def write_junctionInfo(trec, junctions_by_chr, accepted_canonical_sites, indelIn
               "genomic_start_coord": d+1,  # write out as 1-based start
               "genomic_end_coord": a,      # already is 1-based end
               "transcript_coord": "?????",  # this is where the exon ends w.r.t to id sequence, ToDo: implement later
-              "junction_category": "known" if ((d,a) in junctions_by_chr[trec.chrom]['da_pairs']) else "novel",
+              "junction_category": junction_cat,
               "start_site_category": "known" if min_diff_s==0 else "novel",
               "end_site_category": "known" if min_diff_e==0 else "novel",
-              "diff_to_Ref_start_site": min_diff_s,
-              "diff_to_Ref_end_site": min_diff_e,
+              "diff_to_Ref_start_site": min_diff_s if min_diff_s==min_diff_s else "NA", # check if min_diff is actually nan
+              "diff_to_Ref_end_site": min_diff_e if min_diff_e==min_diff_e else "NA",   # check if min_diff is actually nan
               "bite_junction": "TRUE" if ((min_diff_s<0 or min_diff_e<0) and not(min_diff_s>0 or min_diff_e>0)) else "FALSE",
               "splice_site": splice_site,
               "canonical": "canonical" if splice_site in accepted_canonical_sites else "non_canonical",
@@ -1406,12 +1480,15 @@ def write_junctionInfo(trec, junctions_by_chr, accepted_canonical_sites, indelIn
               "indel_near_junct": indel_near_junction,
               "phyloP_start": phyloP_start,
               "phyloP_end": phyloP_end,
-              "sample_with_cov": sum(cov!=0 for cov in sample_cov.values()) if covInf is not None else "NA",
-              "total_coverage": sum(sample_cov.values()) if covInf is not None else "NA"}
+              "sample_with_cov": sum([cov_uniq>0 for (cov_uniq,cov_multi) in sample_cov.values()]) if covInf is not None else "NA",
+              "total_coverage_unique": sum([cov_uniq for (cov_uniq,cov_multi ) in sample_cov.values()]) if covInf is not None else "NA",
+              "total_coverage_multi": sum([cov_multi for (cov_uniq,cov_multi ) in sample_cov.values()]) if covInf is not None else "NA"}
 
         if covInf is not None:
             for sample in covNames:
-                qj[sample] = sample_cov[sample]
+                cov_uniq, cov_multi = sample_cov[sample]
+                qj[sample+'_unique'] = str(cov_uniq)
+                qj[sample+'_multi'] = str(cov_multi)
 
         fout.writerow(qj)
 
@@ -1436,20 +1513,65 @@ def get_fusion_component(fusion_gtf):
     return result
 
 
-def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr, junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict):
+def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr, junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict, corrGTF):
     if args.is_fusion: # read GFF to get fusion components
         # ex: PBfusion.1.1 --> (1-based start, 1-based end) of where the fusion component is w.r.t to entire fusion
         fusion_components = get_fusion_component(args.isoforms)
 
     ## read coverage files if provided
+    star_out=None
     if args.coverage is not None:
         print("**** Reading Splice Junctions coverage files.", file=sys.stdout)
         SJcovNames, SJcovInfo = STARcov_parser(args.coverage)
-        fields_junc_cur = FIELDS_JUNC + SJcovNames # add the samples to the header
+        fields_junc_cur = FIELDS_JUNC # add the samples to the header
+        for name in SJcovNames:
+            fields_junc_cur += [name + '_unique', name + '_multi']
     else:
-        SJcovNames, SJcovInfo = None, None
-        print("Splice Junction Coverage files not provided.", file=sys.stdout)
-        fields_junc_cur = FIELDS_JUNC
+        if args.short_reads is not None:
+            print("**** Running STAR for calculating Short-Read Coverage.", file=sys.stdout)
+            star_out, star_index = star(args.genome, args.short_reads, args.dir, args.cpus)
+            SJcovNames, SJcovInfo = STARcov_parser(star_out)
+            fields_junc_cur = FIELDS_JUNC
+            for name in SJcovNames:
+                fields_junc_cur += [name + '_unique', name + '_multi']
+        else:
+            SJcovNames, SJcovInfo = None, None
+            print("Splice Junction Coverage files not provided.", file=sys.stdout)
+            fields_junc_cur = FIELDS_JUNC
+
+    ## TSS ratio calculation
+    if  args.SR_bam is not None:
+        print("Using provided BAM files for calculating TSS ratio", file=sys.stdout)
+        if os.path.isdir(args.SR_bam):
+            bams = []
+            for files in os.listdir(args.SR_bam):
+                if files.endswith('.bam'):
+                    bams.append(args.SR_bam + '/' + files)
+        else:
+            b = open(args.SR_bam , "r")
+            bams = []
+            for file in b:
+                bams.append(files)
+        chr_order = get_bam_header(bams[0])
+        inside_bed, outside_bed = get_TSS_bed(corrGTF, chr_order)
+        ratio_TSS_dict = get_ratio_TSS(inside_bed, outside_bed, bams, chr_order)
+    else:
+        if args.short_reads is not None:
+            print("Running calculation of TSS ratio", file=sys.stdout)
+            if star_out is None:
+                print("Starting STAR mapping. We need this for calculating TSS ratio. It may take some time...")
+                star_out, star_index = star(args.genome, args.short_reads, args.dir, args.cpus)
+            chr_order = star_index + "/chrNameLength.txt"
+            inside_bed, outside_bed = get_TSS_bed(corrGTF, chr_order)
+            bams=[]
+            for filename in os.listdir(star_out):
+                if filename.endswith('.bam'):
+                    bams.append(star_out + '/' + filename)
+            ratio_TSS_dict = get_ratio_TSS(inside_bed, outside_bed, bams, chr_order)
+        else:
+            print('**** TSS ratio will not be calculated since SR information was not provided')
+            bams = None
+            ratio_TSS_dict = None
 
     if args.cage_peak is not None:
         print("**** Reading CAGE Peak data.", file=sys.stdout)
@@ -1623,7 +1745,7 @@ def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_b
 
     handle_class.close()
     handle_junc.close()
-    return isoforms_info
+    return (isoforms_info, ratio_TSS_dict)
 
 
 def pstdev(data):
@@ -1717,7 +1839,13 @@ def FLcount_parser(fl_count_filename):
             samples = list(v.keys())
             for sample,count in v.items():
                 if sample not in ('superPBID', 'id'):
-                    fl_count_dict[k][sample] = int(count) if count!='NA' else 0
+                    if count=='NA':
+                        fl_count_dict[k][sample] = 0
+                    else:
+                        try:
+                            fl_count_dict[k][sample] = int(count)
+                        except ValueError:
+                            fl_count_dict[k][sample] = float(count)
 
     samples.sort()
 
@@ -1731,7 +1859,9 @@ def FLcount_parser(fl_count_filename):
 def run(args):
     global outputClassPath
     global outputJuncPath
+    global corrFASTA
 
+    corrGTF, corrSAM, corrFASTA, corrORF = get_corr_filenames(args)
     outputClassPath, outputJuncPath = get_class_junc_filenames(args)
 
     start3 = timeit.default_timer()
@@ -1760,7 +1890,7 @@ def run(args):
         indelsTotal = None
 
     # isoform classification + intra-priming + id and junction characterization
-    isoforms_info = isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr, junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict)
+    isoforms_info, ratio_TSS_dict = isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr, junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict, corrGTF)
 
     print("Number of classified isoforms: {0}".format(len(isoforms_info)), file=sys.stdout)
 
@@ -1815,7 +1945,19 @@ def run(args):
                     isoforms_info[iso].FL_dict = defaultdict(lambda: 0)
     else:
         print("Full-length read abundance files not provided.", file=sys.stderr)
-
+    
+    ## TSS ratio dict reading
+    if ratio_TSS_dict is not None:
+        print('**** Adding TSS ratio data... ****')
+        for iso in ratio_TSS_dict:
+            if iso not in isoforms_info:
+                print("WARNING: {0} found in ratio TSS file but not in input FASTA/GTF".format(iso), file=sys.stderr)
+        for iso in isoforms_info:
+            if iso in ratio_TSS_dict:
+                isoforms_info[iso].ratio_TSS = ratio_TSS_dict[iso]['max_ratio_TSS']
+            else:
+                print("WARNING: {0} not found in ratio TSS file. Assign count as 1.".format(iso), file=sys.stderr)
+                isoforms_info[iso].ratio_TSS = 1
 
     ## Isoform expression information
     if args.expression:
@@ -1832,9 +1974,24 @@ def run(args):
             else:
                 gene_exp_dict[gene] = gene_exp_dict[gene]+exp_dict[iso]
     else:
-        exp_dict = None
-        gene_exp_dict = None
-        print("Isoforms expression files not provided.", file=sys.stderr)
+        if args.short_reads is not None:
+            print("**** Running Kallisto to calculate isoform expressions. ")
+            expression_files = kallisto(corrFASTA, args.short_reads, args.dir, args.cpus)
+            exp_dict = expression_parser(expression_files)
+            gene_exp_dict = {}
+            for iso in isoforms_info:
+                if iso not in exp_dict:
+                    exp_dict[iso] = 0
+                    print("WARNING: isoform {0} not found in expression matrix. Assigning TPM of 0.".format(iso), file=sys.stderr)
+                gene = isoforms_info[iso].geneName()
+                if gene not in gene_exp_dict:
+                    gene_exp_dict[gene] = exp_dict[iso]
+                else:
+                    gene_exp_dict[gene] = gene_exp_dict[gene]+exp_dict[iso]
+        else:
+            exp_dict = None
+            gene_exp_dict = None
+            print("Isoforms expression files not provided.", file=sys.stderr)
 
 
     ## Adding indel, FSM class and expression information
@@ -1893,8 +2050,8 @@ def run(args):
             if (isoforms_info[r['isoform']].min_samp_cov == 'NA') or (isoforms_info[r['isoform']].min_samp_cov > sample_with_cov):
                 isoforms_info[r['isoform']].min_samp_cov = sample_with_cov
 
-        if r['total_coverage'] != 'NA':
-            total_cov = int(r['total_coverage'])
+        if r['total_coverage_unique'] != 'NA':
+            total_cov = int(r['total_coverage_unique'])
             sj_covs_by_isoform[r['isoform']].append(total_cov)
             if (isoforms_info[r['isoform']].min_cov == 'NA') or (isoforms_info[r['isoform']].min_cov > total_cov):
                 isoforms_info[r['isoform']].min_cov = total_cov
@@ -1929,9 +2086,9 @@ def run(args):
             fout_junc.writerow(r)
 
     ## Generating report
-    if not args.skip_report:
+    if args.report != 'skip':
         print("**** Generating SQANTI3 report....", file=sys.stderr)
-        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p=args.doc)
+        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d} {a} {b}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p=args.doc, a=args.saturation, b=args.report)
         if subprocess.check_call(cmd, shell=True)!=0:
             print("ERROR running command: {0}".format(cmd), file=sys.stderr)
             sys.exit(-1)
@@ -1947,11 +2104,14 @@ def run(args):
 ### IsoAnnot Lite implementation
 ISOANNOT_PROG =  os.path.join(utilitiesPath, "IsoAnnotLite_SQ3.py")
 
-def run_isoAnnotLite(correctedGTF, outClassFile, outJuncFile, outDir, outName, gff3_opt):
+def run_isoAnnotLite(correctedGTF, outClassFile, outJuncFile, outName, gff3_opt):
     if gff3_opt:
-        ISOANNOT_CMD = "python "+ ISOANNOT_PROG + " {g} {c} {j} -gff3 {t} -d {d} -o {o}".format(g=correctedGTF , c=outClassFile, j=outJuncFile, t=gff3_opt, d=outDir, o=outName)
+        iso_out = os.path.join(os.path.dirname(correctedGTF),outName)
+        isoAnnot_sum = iso_out + ".isoAnnotLite_stats.txt"
+        ISOANNOT_CMD = "python "+ ISOANNOT_PROG + " {g} {c} {j} -gff3 {t} -o {o} -novel -stdout {i}".format(g=correctedGTF , c=outClassFile, j=outJuncFile, t=gff3_opt, o=iso_out, i=isoAnnot_sum)
     else:
-        ISOANNOT_CMD = "python "+ ISOANNOT_PROG + " {g} {c} {j} -d {d} -o {o}".format(g=correctedGTF , c=outClassFile, j=outJuncFile, d=outDir, o=outName)
+        iso_out = os.path.dirname(correctedGTF) + outName
+        ISOANNOT_CMD = "python "+ ISOANNOT_PROG + " {g} {c} {j} -o {o} -novel".format(g=correctedGTF , c=outClassFile, j=outJuncFile, o=iso_out)
     if subprocess.check_call(ISOANNOT_CMD, shell=True)!=0:
         print("ERROR running command: {0}".format(ISOANNOT_CMD), file=sys.stderr)
         sys.exit(-1)
@@ -2072,13 +2232,14 @@ class PolyAPeak:
 
 
 def split_input_run(args):
+    SPLIT_ROOT_DIR = get_split_dir(args)
     if os.path.exists(SPLIT_ROOT_DIR):
         print("WARNING: {0} directory already exists! Abort!".format(SPLIT_ROOT_DIR), file=sys.stderr)
         sys.exit(-1)
     else:
         os.makedirs(SPLIT_ROOT_DIR)
 
-    if args.gtf:
+    if not args.fasta:
         recs = [r for r in collapseGFFReader(args.isoforms)]
         n = len(recs)
         chunk_size = n//args.chunks + (n%args.chunks >0)
@@ -2117,7 +2278,7 @@ def split_input_run(args):
         args2.isoforms = x
         args2.novel_gene_prefix = str(i)
         args2.dir = d
-        args2.skip_report = True
+        args2.report = 'skip'
         p = Process(target=run, args=(args2,))
         p.start()
         pools.append(p)
@@ -2168,9 +2329,9 @@ def combine_split_runs(args, split_dirs):
     if not args.skipORF:
         f_faa.close()
 
-    if not args.skip_report:
+    if args.report != 'skip':
         print("**** Generating SQANTI3 report....", file=sys.stderr)
-        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p=args.doc)
+        cmd = RSCRIPTPATH + " {d}/{f} {c} {j} {p} {d} {a} {b}".format(d=utilitiesPath, f=RSCRIPT_REPORT, c=outputClassPath, j=outputJuncPath, p=args.doc, a=args.saturation, b=args.report)
         if subprocess.check_call(cmd, shell=True)!=0:
             print("ERROR running command: {0}".format(cmd), file=sys.stderr)
             sys.exit(-1)
@@ -2180,7 +2341,7 @@ def main():
 
     #arguments
     parser = argparse.ArgumentParser(description="Structural and Quality Annotation of Novel Transcript Isoforms")
-    parser.add_argument('isoforms', help='\tIsoforms (FASTA/FASTQ) or GTF format. Recommend provide GTF format with the --gtf option.')
+    parser.add_argument('isoforms', help='\tIsoforms (FASTA/FASTQ) or GTF format. It is recommended to provide them in GTF format, but if it is needed to map the sequences to the genome use a FASTA/FASTQ file with the --fasta option.')
     parser.add_argument('annotation', help='\t\tReference annotation file (GTF format)')
     parser.add_argument('genome', help='\t\tReference genome (Fasta format)')
     parser.add_argument("--min_ref_len", type=int, default=200, help="\t\tMinimum reference transcript length (default: 200 bp)")
@@ -2191,9 +2352,9 @@ def main():
     parser.add_argument("--polyA_peak", help='\t\tPolyA Peak (BED format, optional)')
     parser.add_argument("--phyloP_bed", help="\t\tPhyloP BED for conservation score (BED, optional)")
     parser.add_argument("--skipORF", default=False, action="store_true", help="\t\tSkip ORF prediction (to save time)")
-    parser.add_argument("--is_fusion", default=False, action="store_true", help="\t\tInput are fusion isoforms, must supply GTF as input using --gtf")
+    parser.add_argument("--is_fusion", default=False, action="store_true", help="\t\tInput are fusion isoforms, must supply GTF as input")
     parser.add_argument("--orf_input", help="\t\tInput fasta to run ORF on. By default, ORF is run on genome-corrected fasta - this overrides it. If input is fusion (--is_fusion), this must be provided for ORF prediction.")
-    parser.add_argument('-g', '--gtf', help='\t\tUse when running SQANTI by using as input a gtf of isoforms', action='store_true')
+    parser.add_argument('--fasta', help='\t\tUse when running SQANTI by using as input a FASTA/FASTQ with the sequences of isoforms', action='store_true')
     parser.add_argument('-e','--expression', help='\t\tExpression matrix (supported: Kallisto tsv)', required=False)
     parser.add_argument('-x','--gmap_index', help='\t\tPath and prefix of the reference index created by gmap_build. Mandatory if using GMAP unless -g option is specified.')
     parser.add_argument('-t', '--cpus', default=10, type=int, help='\t\tNumber of threads used during alignment by aligners. (default: 10)')
@@ -2207,9 +2368,13 @@ def main():
     parser.add_argument('--genename', help='\t\tUse gene_name tag from GTF to define genes. Default: gene_id used to define genes', default=False, action='store_true')
     parser.add_argument('-fl', '--fl_count', help='\t\tFull-length PacBio abundance file', required=False)
     parser.add_argument("-v", "--version", help="Display program version number.", action='version', version='SQANTI3 '+str(__version__))
-    parser.add_argument("--skip_report", action="store_true", default=False, help=argparse.SUPPRESS)
+    parser.add_argument("--saturation", action="store_true", default=False, help='\t\tInclude saturation curves into report')
+    parser.add_argument("--report", choices=['html', 'pdf', 'both', 'skip'], default='html', help='\t\tselect report format\t\t--html\t\t--pdf\t\t--both\t\t--skip')
     parser.add_argument('--isoAnnotLite' , help='\t\tRun isoAnnot Lite to output a tappAS-compatible gff3 file',required=False, action='store_true' , default=False)
     parser.add_argument('--gff3' , help='\t\tPrecomputed tappAS species specific GFF3 file. It will serve as reference to transfer functional attributes',required=False)
+    parser.add_argument('--short_reads', help='\t\tFile Of File Names (fofn, space separated) with paths to FASTA or FASTQ from Short-Read RNA-Seq. If expression or coverage files are not provided, Kallisto (just for pair-end data) and STAR, respectively, will be run to calculate them.', required=False)
+    parser.add_argument('--SR_bam' , help='\t\t Directory or fofn file with the sorted bam files of Short Reads RNA-Seq mapped against the genome', required=False)
+
 
 
     args = parser.parse_args()
@@ -2218,8 +2383,8 @@ def main():
         if args.orf_input is None:
             print("WARNING: Currently if --is_fusion is used, no ORFs will be predicted. Supply --orf_input if you want ORF to run!", file=sys.stderr)
             args.skipORF = True
-        if not args.gtf:
-            print("ERROR: if --is_fusion is on, must supply GTF as input and use --gtf!", file=sys.stderr)
+        if args.fasta:
+            print("ERROR: if --is_fusion is on, must supply GTF as input", file=sys.stderr)
             sys.exit(-1)
 
     if args.gff3 is not None:
@@ -2261,7 +2426,7 @@ def main():
         print("ERROR: Input isoforms {0} doesn't exist. Abort!".format(args.isoforms), file=sys.stderr)
         sys.exit()
 
-    if not args.gtf:
+    if args.fasta:
         if args.aligner_choice == 'gmap':
             if not os.path.isdir(os.path.abspath(args.gmap_index)):
                 print("GMAP index {0} doesn't exist! Abort.".format(args.gmap_index), file=sys.stderr)
@@ -2319,15 +2484,16 @@ def main():
         if args.isoAnnotLite:
             corrGTF, corrSAM, corrFASTA, corrORF = get_corr_filenames(args)
             outputClassPath, outputJuncPath = get_class_junc_filenames(args)
-            run_isoAnnotLite(corrGTF, outputClassPath, outputJuncPath, args.dir, args.output, args.gff3)
+            run_isoAnnotLite(corrGTF, outputClassPath, outputJuncPath, args.output, args.gff3)
     else:
         split_dirs = split_input_run(args)
         combine_split_runs(args, split_dirs)
+        SPLIT_ROOT_DIR = get_split_dir(args)
         shutil.rmtree(SPLIT_ROOT_DIR)
         if args.isoAnnotLite:
             corrGTF, corrSAM, corrFASTA, corrORF = get_corr_filenames(args)
             outputClassPath, outputJuncPath = get_class_junc_filenames(args)
-            run_isoAnnotLite(corrGTF, outputClassPath, outputJuncPath, args.dir, args.output, args.gff3)
+            run_isoAnnotLite(corrGTF, outputClassPath, outputJuncPath, args.output, args.gff3)
 
 
 if __name__ == "__main__":
