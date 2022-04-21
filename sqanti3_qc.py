@@ -1707,7 +1707,7 @@ def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_b
         else:
             b = open(args.SR_bam , "r")
             bams = []
-            for file in b:
+            for files in b:
                 bams.append(files)
         chr_order = get_bam_header(bams[0])
         inside_bed, outside_bed = get_TSS_bed(corrGTF, chr_order)
