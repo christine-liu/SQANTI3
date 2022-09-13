@@ -6,7 +6,7 @@
 # Modified by Christine (csl022@health.ucsd.edu) currently as SQANTICL branch of SQANTI3 version (05/15/2020)
 
 __author__  = "etseng@pacb.com"
-__version__ = '4.1'  # Python 3.7
+__version__ = '4.1_CL2'  # Python 3.7
 
 import pdb
 import os, re, sys, subprocess, timeit, glob, copy
