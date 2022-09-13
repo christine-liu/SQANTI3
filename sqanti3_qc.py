@@ -6,7 +6,7 @@
 # Modified by Christine (csl022@health.ucsd.edu) currently as SQANTICL branch of SQANTI3 version (05/15/2020)
 
 __author__  = "etseng@pacb.com"
-__version__ = '3.3'  # Python 3.7
+__version__ = '4.1'  # Python 3.7
 
 import pdb
 import os, re, sys, subprocess, timeit, glob, copy
@@ -1062,7 +1062,7 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
                         # (2) this one is better (prev not FSM or is FSM but worse tss/tts)
                         if cat_ranking[isoform_hit.str_class] < cat_ranking["full-splice_match"] or \
                                                     abs(diff_tss)+abs(diff_tts) < isoform_hit.get_total_diff():
-                            if abs(diff_tss) < 50 and abs(diff_tts) < 50:
+                            if abs(diff_tss) <= 50 and abs(diff_tts) <= 50:
                                 subtype = 'reference_match'
                                 isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
                                                                  str_class="full-splice_match",
@@ -1082,7 +1082,7 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
 
                                 # subcategory for matching 5' and non-matching 3'
 
-                            if abs(diff_tss) < 50 and abs(diff_tts) > 50:
+                            if abs(diff_tss) <= 50 and abs(diff_tts) > 50:
                                 subtype = 'alternative_3end'
                                 isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
                                                                  str_class="full-splice_match",
@@ -1101,7 +1101,7 @@ def transcriptsKnownSpliceSites(refs_1exon_by_chr, refs_exons_by_chr, start_ends
                                                                  seqAdownTTS=seq_downTTS)
 
                                 # subcategory for matching 3' and non-matching 5'
-                            if abs(diff_tss) > 50 and abs(diff_tts) < 50:
+                            if abs(diff_tss) > 50 and abs(diff_tts) <= 50:
                                 subtype = 'alternative_5end'
                                 isoform_hit = myQueryTranscripts(trec.id, diff_tss, diff_tts, trec.exonCount, trec.length,
                                                                  str_class="full-splice_match",
@@ -1708,7 +1708,7 @@ def isoformClassification(args, isoforms_by_chr, refs_1exon_by_chr, refs_exons_b
             b = open(args.SR_bam , "r")
             bams = []
             for files in b:
-                bams.append(files)
+                bams.append(files.strip())
         chr_order = get_bam_header(bams[0])
         inside_bed, outside_bed = get_TSS_bed(corrGTF, chr_order)
         ratio_TSS_dict = get_ratio_TSS(inside_bed, outside_bed, bams, chr_order)
