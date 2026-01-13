@@ -128,5 +128,26 @@ dmypy.json
 # Pyre type checker
 .pyre/
 example/Homo_sapiens.GRCh38.dna.chromosome.13.fa
-example/SQANTI3_output/STAR_index/SA
-example/SQANTI3_output/STAR_index/SAindex
+
+# PyCharm
+.idea/
+.emacs.bak/
+
+# SQANTI example big output files
+example/SQANTI3_QC_output/STAR_index/SA
+example/SQANTI3_QC_output/STAR_index/SAindex
+example/SQANTI3_QC_reference/STAR_index/SA
+example/SQANTI3_QC_reference/STAR_index/SAindex
+
+# Hidden directories
+.pytest_cache
+.vscode
+#Examples Pablo
+sqanti_qc.out
+/pablo_tests
+/wiki
+src/data/module_logger_config.json
+# BugFixes
+/bugfix
+example/ogs
+test/logs/test_module.log
