@@ -12,7 +12,7 @@ from .classification_utils import (
 )
 
 
-def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, trec, genome_dict, nPolyA):
+def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons_by_chr, start_ends_by_gene, trec, genome_dict, nPolyA, CDS_by_gene):
     """
     This function determines if the isoform hits a known splice site, categorizing it as either
     FSM or ISM.
@@ -23,7 +23,8 @@ def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons
     :param nPolyA: window size to look for polyA
     :return: myQueryTranscripts object that indicates the best reference hit
     """
-
+    def in_CDS(CDS_by_gene, ref_gene, coord):
+        return coord >= CDS_by_gene[ref_gene]['start'] and coord < CDS_by_gene[ref_gene]['end']
     # Transcript information for a single query id and comparison with reference.
 
     # Intra-priming: calculate percentage of "A"s right after the end
@@ -51,7 +52,7 @@ def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons
     ########### SPLICED TRANSCRIPTS ###########
     ##***************************************##
 
-    cat_ranking = {'full-splice_match': 5, 'incomplete-splice_match': 4, 'anyKnownJunction': 3, 'anyKnownSpliceSite': 2,
+    cat_ranking = {'full-splice_match': 5, 'incomplete-splice_match': 4, 'anyKnownJunction': 3, 'anyKnownSpliceSite': 2, 'novel_not_in_catalog':1.5, 
                    'geneOverlap': 1, '': 0}
     
     # This treats different multi or mono-exonic queries
@@ -89,9 +90,24 @@ def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons
                 if ref.exonCount == 1: # mono-exonic reference, handle specially here
                     # TODO: calc exon overlap is called more than twice. Create a variable to store the value 
                     if calc_exon_overlap(trec.exons, ref.exons) > 0 and cat_ranking[isoform_hit.str_class] < cat_ranking["geneOverlap"]: #CHECK wouldn't it be better with just a number?
+                        new_subtype=[]
+                        for jxn in trec.junctions:
+                            donor=jxn[0]
+                            acceptor=jxn[1]
+                            donor_CDS=in_CDS(CDS_by_gene, ref.gene, donor)
+                            acceptor_CDS=in_CDS(CDS_by_gene, ref.gene, acceptor)
+                            if donor_CDS and acceptor_CDS:
+                                new_subtype.append("CDS_CDS")
+                            elif donor_CDS and not acceptor_CDS:
+                                new_subtype.append("CDS_UTR")
+                            elif not donor_CDS and acceptor_CDS:
+                                new_subtype.append("CDS_UTR")
+                            else:
+                                new_subtype.append("UTR_UTR")
+                        subtypeString=",".join(sorted(list(set(new_subtype))))
                         isoform_hit = myQueryTranscripts(trec.id, "NA", "NA", trec.exonCount, trec.length,
-                                                            "geneOverlap",
-                                                             subtype="mono-exon",
+                                                            str_class='novel_not_in_catalog',
+                                                             subtype=subtypeString,
                                                              chrom=trec.chrom,
                                                              strand=trec.strand,
                                                              genes=[ref.gene],
@@ -200,7 +216,7 @@ def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons
                                 (isoform_hit.str_class=='anyKnownJunction' and q_sp_hit==isoform_hit.q_splicesite_hit and q_exon_d < abs(trec.exonCount-isoform_hit.refExons)):
                             isoform_hit = myQueryTranscripts(trec.id, "NA", "NA", trec.exonCount, trec.length,
                                                              str_class="anyKnownJunction",
-                                                             subtype="no_subcategory",
+                                                             subtype=match_type,
                                                              chrom=trec.chrom,
                                                              strand=trec.strand,
                                                              genes=[ref.gene],
@@ -347,7 +363,7 @@ def transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons
     return isoform_hit
 
 
-def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_gene):
+def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_gene, CDS_by_gene, refs_1exon_by_chr, refs_exons_by_chr, ref_ex_by_gene):
     """
     At this point: definitely not FSM or ISM, see if it is NIC, NNC, or fusion
     :return isoforms_hit: updated isoforms hit (myQueryTranscripts object)
@@ -370,6 +386,45 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
 
     ref_genes = list(set(isoforms_hit.genes))
 
+    new_subtype=[]
+    def in_exon(trec, coord, ref_gene):
+      #returns True if coordinate is in an exon
+        inEx = False
+        exon_overlaps=len(ref_ex_by_gene[ref_gene].find(coord, coord+1))
+        inEx = True if (exon_overlaps > 0) else False
+        return inEx
+
+    def in_CDS(CDS_by_gene, ref_gene, coord):
+        return coord >= CDS_by_gene[ref_gene]['start'] and coord < CDS_by_gene[ref_gene]['end']
+
+    def novel_exon(trec, ref_gene):
+      #input is trec genePredRecord of isoform in question
+      #output is Bool (True is has novel exon, False otherwise), and list of novel junction indices that are involved in novel exon formation
+      #novel exon does not overlap with any known exons
+        i=0
+        novel_exons=[]
+        novel_junctions=[]
+        while i < len(trec.exons):
+            ex_start = trec.exonStarts[i] + 1 #(exonStarts are 0-based)
+            ex_end = trec.exonEnds[i]
+            overlap = ref_ex_by_gene[ref_gene].find(ex_start, ex_end)
+            if len(overlap) == 0:
+                novel_exons.append(i)
+            i+=1
+        if len(novel_exons) == 0:
+            return False, novel_junctions
+        else:
+            for j in novel_exons:
+                if j == 0:
+                    novel_junctions.append(0)
+                elif j == len(trec.exons) - 1:
+                    novel_junctions.append(j-1)
+                else:
+                    novel_junctions.append(j-1)
+                    novel_junctions.append(j)
+            return True, list(set(novel_junctions))
+
+
     # at this point, we have already found matching genes/transcripts
     # hence we do not need to update refLen or refExon
     # or tss_diff and tts_diff (always set to "NA" for non-FSM/ISM matches)
@@ -383,20 +438,90 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
         ref_gene_junctions = junctions_by_gene[ref_genes[0]]
         # 1. check if all donors/acceptor sites are known (regardless of which ref gene it came from)
         # 2. check if this query isoform uses a subset of the junctions from the single ref hit
-        all_junctions_known = True
-        all_junctions_in_hit_ref = True
-        for d,a in trec.junctions:
-            all_junctions_known = all_junctions_known and (d in junctions_by_chr[trec.chrom]['donors']) and (a in junctions_by_chr[trec.chrom]['acceptors'])
-            all_junctions_in_hit_ref = all_junctions_in_hit_ref and ((d,a) in ref_gene_junctions)
-        if all_junctions_known:
-            isoforms_hit.str_class="novel_in_catalog"
-            if all_junctions_in_hit_ref:
-                isoforms_hit.subtype = "combination_of_known_junctions"
+        def novel_site(jxn):
+            d = jxn[0]
+            a = jxn[1]
+            return d in junctions_by_chr[trec.chrom]['donors'], a in junctions_by_chr[trec.chrom]['acceptors']
+
+        def novel_jxn(jxn):
+            d = jxn[0]
+            a = jxn[1]
+            return (d,a) in ref_gene_junctions
+
+        def tuple_list_all(tup):
+              a = tup[0]
+              b = tup[1]
+              return a and b
+
+        splice_list_known = list(map(novel_site, trec.junctions)) #list of tuples indicating whether donor or acceptor is in donor/acceptor list
+        jxn_list_known = list(map(novel_jxn, trec.junctions)) #list of bool indicating whether (d,a) in ref_gene_junctions
+        all_splice_known = all(list(map(tuple_list_all, splice_list_known))) # true if all sites are in donors/acceptors
+        all_jxns_known = all(jxn_list_known) # true if all donor,acceptor combinations are known
+
+        if all_splice_known:
+            isoforms_hit.str_class = "novel_in_catalog"
+            if has_intron_retention():
+                new_subtype.append("intron_retention")
+            if all_jxns_known:
+                new_subtype.append("combination_of_known_junctions")
             else:
-                isoforms_hit.subtype = "combination_of_known_splicesites"
+                new_subtype.append("combination_of_known_splicesites")
         else:
             isoforms_hit.str_class="novel_not_in_catalog"
-            isoforms_hit.subtype = "at_least_one_novel_splicesite"
+            novelJxn_index = [i for i,x in enumerate(jxn_list_known) if x==False] #indices of any donor/acceptor pair where one is novel
+            novel_ex_status, novel_ex_jxns = novel_exon(trec, ref_genes[0])
+            if novel_ex_status:
+                new_subtype.append("novel_exon")
+            newJxn_list = list((set(novel_ex_jxns)^set(novelJxn_index))&set(novelJxn_index))
+            for i in newJxn_list: #iterate over all the other novel junctions to see what they are
+                curr_donor = trec.junctions[i][0]
+                curr_donor_novel = not splice_list_known[i][0]
+                curr_acceptor = trec.junctions[i][1]
+                curr_acceptor_novel = not splice_list_known[i][1]
+                curr_donor_CDS = in_CDS(CDS_by_gene, ref_genes[0], curr_donor)
+                curr_acceptor_CDS = in_CDS(CDS_by_gene, ref_genes[0], curr_acceptor)
+                curr_donor_exon = in_exon(trec, curr_donor,ref_genes[0])
+                curr_acceptor_exon = in_exon(trec, curr_acceptor,ref_genes[0])
+                #for each novel junction figure out if donor/acceptor are in CDS or UTR - combination will determine subtype
+                jxn=str(i)
+                if not curr_donor_novel and not curr_acceptor_novel:
+                    new_subtype.append("combination_of_known_splicesites")
+                elif (curr_donor_novel and not curr_donor_exon) or (curr_acceptor_novel and not curr_acceptor_exon):
+                    new_subtype.append("partial_intron_retention")
+                elif curr_acceptor_novel and curr_acceptor_exon and not curr_donor_novel:
+                    if trec.strand == "+":
+                        new_subtype.append("Alt3")
+                    else:
+                        new_subtype.append("Alt5")
+                elif curr_donor_novel and curr_donor_exon and not curr_acceptor_novel:
+                    if trec.strand == "+":
+                      new_subtype.append("Alt5")
+                    else:
+                      new_subtype.append("Alt3")
+                elif curr_donor_novel and curr_acceptor_novel and curr_donor_CDS and curr_acceptor_CDS and curr_donor_exon and curr_acceptor_exon:
+                    new_subtype.append("CDS_CDS")
+                elif curr_donor_novel and curr_acceptor_novel and (not curr_donor_CDS) and (not curr_acceptor_CDS) and curr_donor_exon and curr_acceptor_exon:
+                    new_subtype.append("UTR_UTR")
+                elif curr_donor_novel and curr_acceptor_novel and curr_donor_CDS and (not curr_acceptor_CDS) and curr_donor_exon and curr_acceptor_exon:
+                    new_subtype.append("CDS_UTR")
+                elif curr_donor_novel and curr_acceptor_novel and (not curr_donor_CDS) and curr_acceptor_CDS and curr_donor_exon and curr_acceptor_exon:
+                    new_subtype.append("CDS_UTR")
+                else:
+                    new_subtype.append("uncategorized")
+        # all_junctions_known = True
+        # all_junctions_in_hit_ref = True
+        # for d,a in trec.junctions:
+        #     all_junctions_known = all_junctions_known and (d in junctions_by_chr[trec.chrom]['donors']) and (a in junctions_by_chr[trec.chrom]['acceptors'])
+        #     all_junctions_in_hit_ref = all_junctions_in_hit_ref and ((d,a) in ref_gene_junctions)
+        # if all_junctions_known:
+        #     isoforms_hit.str_class="novel_in_catalog"
+        #     if all_junctions_in_hit_ref:
+        #         isoforms_hit.subtype = "combination_of_known_junctions"
+        #     else:
+        #         isoforms_hit.subtype = "combination_of_known_splicesites"
+        # else:
+        #     isoforms_hit.str_class="novel_not_in_catalog"
+        #     isoforms_hit.subtype = "at_least_one_novel_splicesite"
     else: # see if it is fusion
         # list of a ref junctions from all genes, including potential shared junctions
         # NOTE: some ref genes could be mono-exonic so no junctions
@@ -410,11 +535,18 @@ def novelIsoformsKnownGenes(isoforms_hit, trec, junctions_by_chr, junctions_by_g
             isoforms_hit.str_class = "moreJunctions"
         else:
             isoforms_hit.str_class = "fusion"
-            isoforms_hit.subtype = "mono-exon" if trec.exonCount==1 else "multi-exon"
-
-    if has_intron_retention():
-        isoforms_hit.subtype = "intron_retention"
-
+            if has_intron_retention():
+                new_subtype.append("intron_retention")
+            if trec.exonCount==1:
+                new_subtype.append("mono-exon")
+            else:
+                new_subtype.append("multi-exon")
+            # isoforms_hit.subtype = "mono-exon" if trec.exonCount==1 else "multi-exon"
+    if len(new_subtype) == 0:
+        new_subtype.append("NOT_DEFINED")
+    isoforms_hit.subtype=",".join(sorted(list(set(new_subtype))))
+    # if has_intron_retention():
+    #     isoforms_hit.subtype = "intron_retention"
     return isoforms_hit
 
 def associationOverlapping(isoforms_hit, trec, junctions_by_chr):

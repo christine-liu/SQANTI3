@@ -18,6 +18,7 @@ from src.qc_classes import genePredReader, myQueryProteins
 from src.utils import mergeDict, flatten
 from src.module_logging import qc_logger
 from src.commands import run_command
+import math
 #from src.commands import GTF2GENEPRED_PROG
 
 def reference_parser(annot,out_dir,out_pref,genome_chroms,gene_name=False,isoAnnot=False,logger=qc_logger):
@@ -38,7 +39,9 @@ def reference_parser(annot,out_dir,out_pref,genome_chroms,gene_name=False,isoAnn
         - refs_exons_by_chr (dict): Dictionary of multi-exon references by chromosome.
         - junctions_by_chr (dict): Dictionary of junctions by chromosome.
         - junctions_by_gene (dict): Dictionary of junctions by gene.
-        - known_5_3_by_gene (dict): Dictionary of known 5' and 3' ends by gene. 
+        - known_5_3_by_gene (dict): Dictionary of known 5' and 3' ends by gene.
+        - CDS_start_end_by_gene (dict): Dictionary of minimum CDS coordinate and maximum CDS coordinate by gene
+        - ref_ex_by_gene (tuple): Tuple of transcript start, end, and gene name 
     """
     from src.commands import GTF2GENEPRED_PROG
 
@@ -70,12 +73,19 @@ def reference_parser(annot,out_dir,out_pref,genome_chroms,gene_name=False,isoAnn
     junctions_by_gene = defaultdict(lambda: set())
     # dict of gene name --> list of known begins and ends (begin always < end, regardless of strand)
     known_5_3_by_gene = defaultdict(lambda: {'begin':set(), 'end': set()})
+    #dict of CDS by gene name
+    CDS_start_end_by_gene = defaultdict(lambda: {'start':set(), 'end': set()})
+    #dict of all exon coordinates by gene
+    ref_ex_by_gene = defaultdict(lambda: IntervalTree())
 
     for r in genePredReader(referenceFiles):
         known_5_3_by_gene[r.gene]['begin'].add(r.txStart)
         known_5_3_by_gene[r.gene]['end'].add(r.txEnd)
         if r.exonCount == 1:
             refs_1exon_by_chr[r.chrom].insert(r.txStart, r.txEnd, r)
+            CDS_start_end_by_gene[r.gene]['start'].add(r.cdsStart)
+            CDS_start_end_by_gene[r.gene]['end'].add(r.cdsEnd)
+            ref_ex_by_gene[r.gene].insert(r.txStart, r.txEnd, r.gene)
         else:
             refs_exons_by_chr[r.chrom].insert(r.txStart, r.txEnd, r)
             # only store junctions for multi-exon transcripts
@@ -84,7 +94,16 @@ def reference_parser(annot,out_dir,out_pref,genome_chroms,gene_name=False,isoAnn
                 junctions_by_chr[r.chrom]['acceptors'].add(a)
                 junctions_by_chr[r.chrom]['da_pairs'][r.strand].add((d,a))
                 junctions_by_gene[r.gene].add((d,a))
-
+            i=0
+            while i < r.exonCount:
+                ref_ex_by_gene[r.gene].insert(r.exonStarts[i], r.exonEnds[i], r.gene)
+                i+=1
+            if r.cdsStart == r.cdsEnd:
+                CDS_start_end_by_gene[r.gene]['start'].add(math.inf)
+                CDS_start_end_by_gene[r.gene]['end'].add(-math.inf)
+            else:
+                CDS_start_end_by_gene[r.gene]['start'].add(r.cdsStart)
+                CDS_start_end_by_gene[r.gene]['end'].add(r.cdsEnd)
     # check that all genes' chromosomes are in the genome file
     ref_chroms = set(refs_1exon_by_chr.keys()).union(list(refs_exons_by_chr.keys()))
     diff = ref_chroms.difference(genome_chroms)
@@ -109,8 +128,11 @@ def reference_parser(annot,out_dir,out_pref,genome_chroms,gene_name=False,isoAnn
         for strand in junctions_by_chr[chr]['da_pairs'].keys():
             for junction in junctions_by_chr[chr]['da_pairs'][strand]:
                 junctions_by_chr[chr]['da_tree'].insert(junction[0], junction[1], (*junction,strand))
-    return dict(refs_1exon_by_chr), dict(refs_exons_by_chr), dict(junctions_by_chr), dict(junctions_by_gene), dict(known_5_3_by_gene)
+    for x in CDS_start_end_by_gene:
+        CDS_start_end_by_gene[x]['start']=min(CDS_start_end_by_gene[x]['start'])
+        CDS_start_end_by_gene[x]['end']=max(CDS_start_end_by_gene[x]['end'])
 
+    return dict(refs_1exon_by_chr), dict(refs_exons_by_chr), dict(junctions_by_chr), dict(junctions_by_gene), dict(known_5_3_by_gene), dict(CDS_start_end_by_gene), dict(ref_ex_by_gene)
 
 def isoforms_parser(queryFile):
     """

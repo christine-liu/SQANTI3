@@ -59,7 +59,7 @@ def run(args):
 
     ## parse reference id (GTF) to dicts
     refs_1exon_by_chr, refs_exons_by_chr, \
-        junctions_by_chr, junctions_by_gene, start_ends_by_gene = \
+        junctions_by_chr, junctions_by_gene, start_ends_by_gene, CDS_by_gene, ref_ex_by_gene = \
             reference_parser(args.refGTF,args.dir,args.output, list(genome_dict.keys()),
                              args.genename, args.isoAnnotLite)
 
@@ -96,7 +96,7 @@ def run(args):
         junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict,
         outputClassPath, outputJuncPath, fusion_components, isoform_hits_name,
         SJcovNames, SJcovInfo, fields_junc_cur, ratio_TSS_dict, cage_peak_obj,
-        polya_peak_obj, polyA_motif_list, phyloP_reader)
+        polya_peak_obj, polyA_motif_list, phyloP_reader, CDS_by_gene, ref_ex_by_gene)
 
 
     qc_logger.info(f"Number of classified isoforms: {len(isoforms_info)}")

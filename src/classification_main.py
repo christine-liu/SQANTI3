@@ -17,8 +17,8 @@ def isoform_classification_pipeline(
         junctions_by_gene, start_ends_by_gene, genome_dict, indelsJunc, orfDict,
         outputClassPath, outputJuncPath, fusion_components,isoform_hits_name,SJcovNames, 
         SJcovInfo, fields_junc_cur,ratio_TSS_dict, cage_peak_obj, polya_peak_obj,
-        polyA_motif_list, phyloP_reader
-        ):
+        polyA_motif_list, phyloP_reader,
+        CDS_by_gene, ref_ex_by_gene):
     # running classification
     qc_logger.info("**** Performing Classification of Isoforms")
 
@@ -37,7 +37,7 @@ def isoform_classification_pipeline(
         for rec in records:
             # Find best reference hit
             isoform_hit = classify_isoform(rec, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr,
-                                            junctions_by_gene, start_ends_by_gene, genome_dict, isoform_hits_name,window)
+                                            junctions_by_gene, start_ends_by_gene, genome_dict, CDS_by_gene, ref_ex_by_gene, isoform_hits_name,window)
             # write out junction information
             write_junction_info(rec, junctions_by_chr, accepted_canonical_sites, indelsJunc, 
                                 genome_dict, fout_junc, SJcovInfo, SJcovNames, phyloP_reader)

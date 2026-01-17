@@ -8,14 +8,14 @@ from src.classification_classifiers import (
 )
 
 def classify_isoform(rec, refs_1exon_by_chr, refs_exons_by_chr, junctions_by_chr, junctions_by_gene,
-                     start_ends_by_gene, genome_dict, isoform_hits_name=None,window=20):
+                     start_ends_by_gene, genome_dict, CDS_by_gene, ref_ex_by_gene, isoform_hits_name=None,window=20):
         # Find best reference hit
         isoform_hit = transcriptsKnownSpliceSites(isoform_hits_name, refs_1exon_by_chr, refs_exons_by_chr, 
-                                                  start_ends_by_gene, rec, genome_dict, nPolyA=window)
+                                                  start_ends_by_gene, rec, genome_dict, nPolyA=window, CDS_by_gene=CDS_by_gene)
 
         if isoform_hit.str_class in ("anyKnownJunction", "anyKnownSpliceSite"):
             # not FSM or ISM --> see if it is NIC, NNC, or fusion
-            isoform_hit = novelIsoformsKnownGenes(isoform_hit, rec, junctions_by_chr, junctions_by_gene)
+            isoform_hit = novelIsoformsKnownGenes(isoform_hit, rec, junctions_by_chr, junctions_by_gene, CDS_by_gene, refs_1exon_by_chr, refs_exons_by_chr, ref_ex_by_gene)
         elif isoform_hit.str_class in ("", "geneOverlap"):
             # possibly NNC, genic, genic intron, anti-sense, or intergenic
             isoform_hit = associationOverlapping(isoform_hit, rec, junctions_by_chr)
